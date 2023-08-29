@@ -1,0 +1,6 @@
+torch >=1.13.0,<=1.13.1
+transformers[sentencepiece]==4.28.1
+PyYAML>=5.2
+datasets>=2.11.0
+segtok>=1.5.11
+gdown>=4.7.1

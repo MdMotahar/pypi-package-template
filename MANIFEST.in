@@ -1,0 +1,2 @@
+include src/gt_ner/config/*.yaml
+include src/gt_ner/requirements.txt
