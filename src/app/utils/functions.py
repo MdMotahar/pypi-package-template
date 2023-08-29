@@ -1,85 +1,113 @@
-import re
-import gdown
+import mmap
+from typing import Union,Optional
 import os
-from app.utils.model_config import download_url
 import re
 import shutil
+import app
 from pathlib import Path
-from app.config import CACHE_DIR
-from typing import Union, List, Tuple
-from zipfile import ZipFile
-import random
-import numpy as np
-import torch
-    
+import subprocess
+from app.utils.download_config import MODEL_URL_MAP
+import requests
+import re
+import gdown
+import bkit
 
-def download_file_from_google_drive(fileid:str, filename:str) -> None:
-    """
-    Download a file from Google Drive using its file ID.
+def download_file_from_google_drive(fileid, filename):
+    gdown.download(fileid, filename, quiet=False, fuzzy=True)
+
+def load_cached_file(
+    model_name: str,
+    force_redownload: bool,
+    ) -> Path:
     
+    """
+    Load cached model files or download and cache them.
+
     Args:
-        fileid (str): The Google Drive file ID.
-        filename (str): The name of the file to save.
-    
-    Returns:
-        None
-    """
-    gdown.download(fileid, filename, quiet=False)
+        model_name (str): Name of the pre-trained NER model.
+        force_redownload (bool): Flag to force redownload if the model is not cached.
 
-
-def download_models()->Path:
-    """
-    Download and extract model files from a Google Drive link.
-    
-    This function downloads a ZIP file from a Google Drive link using the download_file_from_google_drive function,
-    and then extracts its contents to a specified cache directory. The extracted model folder is detected and returned.
-    
     Returns:
-        Path: The path to the detected model folder.
+        Path: Path to the directory containing cached model files.
     """
-    cache_dir = CACHE_DIR
-    # purge cache directory from the saved model files before downloading
-    if os.path.exists(cache_dir):
-        shutil.rmtree(cache_dir,ignore_errors=False)
-    else:
+     
+    if not force_redownload and os.path.exists(gt_topic.CACHE_DIR):
+        cache_dir = Path(gt_topic.CACHE_DIR)
+        model_cache_dir = cache_dir / f'{model_name}'
+
+        if os.path.exists(model_cache_dir):
+            return detect_model_folder(model_cache_dir)
+        
+    return download_from_url(model_name)
+    
+def download_from_url(model_name:str) -> Path:
+    
+    """
+    Download model files from a URL and cache them.
+
+    Args:
+        model_name (str): Name of the pre-trained NER model.
+
+    Returns:
+        Path: Path to the directory containing cached model files.
+    """
+    
+    cache_dir = Path(gt_topic.CACHE_DIR)
+    model_cache_dir = cache_dir / f'{model_name}'
+    
+    # build the cache directory if no cache directory is present
+    if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
 
-    download_file_from_google_drive(download_url,os.path.join(cache_dir,'models.zip'))
-    unzip_file(os.path.join(cache_dir,'models.zip'),os.path.join(cache_dir))
+    else:
+        # purge cache directory from the saved model files before downloading
+        if os.path.exists(model_cache_dir):
+            shutil.rmtree(model_cache_dir,ignore_errors=False)
 
-    #remove the zip file
-    os.remove(os.path.join(cache_dir,'models.zip'))
-    return detect_model_folder(cache_dir)
+    file_link = MODEL_URL_MAP[model_name]
+    file_path = str(model_cache_dir)+'.zip'
 
+    download_file_from_google_drive(file_link, file_path)
+    unzip_file(file_path,model_cache_dir)
+    os.remove(file_path)
 
-def unzip_file(file: Path, unzip_to: Path) -> None:
-    """
-    Unzip a file to a specified directory.
+    return detect_model_folder(model_cache_dir)
     
+
+def get_id_from_url(url:str):
+    """
+    Extracts the file ID from a public download url. Supppose, the donwload url
+    is - https://drive.google.com/file/d/1bjHvSQrKLtIYdextXBBKrk2l5P_xWdE1/view?usp=share_link
+    the function will return the file id  - 1bjHvSQrKLtIYdextXBBKrk2l5P_xWdE1
     Args:
-        file (Path): The path to the ZIP file.
-        unzip_to (Path): The path to the directory to unzip to.
-    
-    Returns:
-        None
+        url (str): share link of the file (google drive link for now)
     """
+
+    url = url.split("https://drive.google.com/file/d/")[1]
+    url = re.split("/view\?usp=(sharing|share_link)",url)[0]
+    return url
+
+def unzip_file(file: Path, unzip_to: Path):
+    """
+    unpack and write out in CoNLL column-like format
+    source: flair/file_utils.py
+    """
+    
+    from zipfile import ZipFile
+
     with ZipFile(file, "r") as zipObj:
         # Extract all the contents of zip file in current directory
         zipObj.extractall(unzip_to)
 
-def detect_model_folder(model_cache_dir:Union[str,Path])->Union[str,Path]:
+def detect_model_folder(model_cache_dir:Union[str,Path]):
     """
-    Detect the newly created model folder inside the model_cache_dir.
-    
-    This function detects the newly created model folder inside the provided model_cache_dir after zip extraction.
-    It returns the path to the detected model folder.
-    
+    moke model_cache_dir the new folder that created inside 
+    after extracting the zip archive.
     Args:
-        model_cache_dir (Union[str, Path]): The path to the model cache directory.
-    
+    model_cache_dir (Union[str, Path]): Path to the potential model directory.
+
     Returns:
-        Path: The path to the detected model folder.
-        
+    Path: Path to the actual model directory.
     """
     if isinstance(model_cache_dir,str):
         model_cache_dir = Path(model_cache_dir)
@@ -95,3 +123,27 @@ def detect_model_folder(model_cache_dir:Union[str,Path])->Union[str,Path]:
         model_cache_dir = Path(model_cache_dir)
 
     return model_cache_dir
+
+def bkit_preprocess_text(text):
+    if text is None:
+        return text
+    pipeline = ["normalize_characters",
+                "normalize_punctuation_spaces",
+                "normalize_zero_width_chars",
+                "normalize_halant",
+                "normalize_kar_ambiguity",
+                "clean_non_bangla",
+                "clean_multiple_spaces",
+                "clean_urls",
+                "clean_emojis",
+                "clean_html",
+                "clean_multiple_punctuations",
+                "clean_special_characters",
+                ]
+    
+    for preproc_func in pipeline:
+        text = eval(f"bkit.transform.{preproc_func}(text)")
+        # print(text)
+        if text is None:
+            return text
+    return text

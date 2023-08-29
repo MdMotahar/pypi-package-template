@@ -4,8 +4,10 @@ Bangla Named Entity Recognition System
 
 import os
 import torch
+from . import inference
+from .inference import Infer
 
-VERSION = '0.0.4'
+VERSION = '0.0.1'
 ROOT_DIR = os.path.dirname(__file__) 
 CACHE_DIR = os.path.join(ROOT_DIR,'.cache')
 
